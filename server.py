@@ -11,47 +11,48 @@ model = InceptionV3(weights='imagenet')
 # Create a queue to pass client sockets between threads
 client_queue = Queue()
 
-def decodeImage(encoded_image: str):
-    image_data = base64.b64decode(encoded_image)
-    with open('image.png', 'wb') as outfile:     
-        outfile.write(image_data)
-        return outfile
-
 def handle_client(client_socket):
-    while True:
-        print("Handling client")
-        # Read the message from the client
-        data = client_socket.recv(1024).decode('utf-8')
-        while not data.endswith("##END##"):
-            data += client_socket.recv(1024).decode('utf-8')
-        if not data:
-            break
+    print("Handling client")
+    # Read the message from the client
+    data = client_socket.recv(1024).decode('utf-8')
+    while not data.endswith("##END##"):
+        data += client_socket.recv(1024).decode('utf-8')
+    if not data:
+        return
+    
+    print("Finished reading data")
 
-        # Parse the JSON data
-        message = json.loads(data)
-        encoded_image = message['image']
-        chat_id = message['chat_id']
+    # Parse the JSON data
+    message = json.loads(data[:-7])
+    encoded_image = message['image']
+    chat_id = message['chat_id']
 
-        image = decodeImage(encoded_image)
-        image_array = preprocess_input(image)
+    image_data = base64.b64decode(encoded_image)
+    with open('out_image.png', 'wb') as outfile:
+        outfile.write(image_data)
 
-        predictions = model.predict(image_array)
-        decoded_predictions = decode_predictions(predictions, top=5)[0]
+    image = Image.open('out_image.png')
+    image = image.resize((299, 299))
+    image_array = np.array(image)
+    image_array = np.expand_dims(image_array, axis=0)
+    image_array = preprocess_input(image_array)
 
-        # Compose the response dictionary
-        response = {
-            'predictions': [
-                {'label': label, 'proba': float(proba)}
-                for label, _, proba in decoded_predictions
-            ],
-            'chat_id': chat_id
-        }
+    predictions = model.predict(image_array)
+    decoded_predictions = decode_predictions(predictions, top=5)[0]
 
-        # Send the response back to the client
-        response_json = json.dumps(response)
-        client_socket.send(response_json.encode('utf-8'))
-        break
+    # Compose the response dictionary
+    response = {
+        'predictions': [
+            {'name': name, 'proba': float(proba)}
+            for label, name, proba in decoded_predictions
+        ],
+        'chat_id': chat_id
+    }
+    print("response: ", response)
 
+    # Send the response back to the client
+    response_json = json.dumps(response) + "##END##"
+    client_socket.send(response_json.encode('utf-8'))
     client_socket.close()
 
 def client_thread():
@@ -59,7 +60,7 @@ def client_thread():
         client_socket = client_queue.get()
         handle_client(client_socket)
 
-def main():
+if __name__ == '__main__':
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('localhost', 8000))
     server_socket.listen(1)
@@ -72,6 +73,3 @@ def main():
         client_socket, address = server_socket.accept()
         print(f'Connected to client: {address}')
         client_queue.put(client_socket)
-
-if __name__ == '__main__':
-    main()
